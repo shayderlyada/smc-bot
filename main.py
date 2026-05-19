@@ -1,30 +1,47 @@
+import os
 import time
 import requests
+from threading import Thread
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # =========================
-# CONFIG
+# TELEGRAM CONFIG
 # =========================
 
 TOKEN = "8648698110:AAF2KPxg92LE9JYrTCbZcLmFaDl2w_MDahs"
 CHAT_ID = "-1003891592823"
 
-prices = []
-
 # =========================
-# TELEGRAM
+# FAKE WEB SERVER (Render FIX)
 # =========================
 
-def send(msg):
+def run_server():
+    port = int(os.environ.get("PORT", 10000))
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"SMC bot alive")
+
+    server = HTTPServer(("0.0.0.0", port), Handler)
+    server.serve_forever()
+
+Thread(target=run_server, daemon=True).start()
+
+# =========================
+# TELEGRAM SENDER
+# =========================
+
+def send_telegram(message: str):
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            json={"chat_id": CHAT_ID, "text": msg}
-        )
+        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": CHAT_ID, "text": message})
     except Exception as e:
-        print("telegram error:", e)
+        print("Telegram error:", e)
 
 # =========================
-# GET PRICE (REST)
+# PRICE FETCH (BINANCE)
 # =========================
 
 def get_price():
@@ -33,33 +50,26 @@ def get_price():
     return float(r.json()["price"])
 
 # =========================
-# SIMPLE SMC LOGIC
+# SIMPLE SMC LOGIC (CLEAN VERSION)
 # =========================
 
-def detect_signal(prices):
+prices = []
+
+def check_signal(prices):
     if len(prices) < 20:
         return None
 
     recent = prices[-20:]
     last = recent[-1]
+
     high = max(recent)
     low = min(recent)
 
-    # LONG breakout
     if last > high * 0.999:
-        entry = last
-        sl = low
-        tp = entry + (entry - sl) * 2
+        return ("LONG", last, low)
 
-        return ("LONG", entry, sl, tp)
-
-    # SHORT breakout
     if last < low * 1.001:
-        entry = last
-        sl = high
-        tp = entry - (sl - entry) * 2
-
-        return ("SHORT", entry, sl, tp)
+        return ("SHORT", last, high)
 
     return None
 
@@ -67,7 +77,7 @@ def detect_signal(prices):
 # MAIN LOOP
 # =========================
 
-print("SMC BOT STARTED...")
+print("SMC BOT STARTED")
 
 while True:
     try:
@@ -76,45 +86,26 @@ while True:
 
         print("price:", price)
 
-        signal = detect_signal(prices)
+        signal = check_signal(prices)
 
         if signal:
-            side, entry, sl, tp = signal
+            side, entry, level = signal
 
             msg = f"""
 🚨 SMC SIGNAL
 
 Side: {side}
-
 Entry: {entry}
-SL: {sl}
-TP: {tp}
+
+SL Level: {level}
 """
 
-            send(msg)
+            send_telegram(msg)
             print("SIGNAL SENT")
 
-            prices = prices[-100:]  # чистим память
+            prices = prices[-100:]
 
     except Exception as e:
-        print("error:", e)
+        print("ERROR:", e)
 
     time.sleep(3)
-
-
-    import os
-
-port = int(os.environ.get("PORT", 10000))
-
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"bot alive")
-
-server = HTTPServer(("0.0.0.0", port), Handler)
-
-import threading
-threading.Thread(target=server.serve_forever).start()
