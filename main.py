@@ -1,111 +1,92 @@
-import os
 import time
 import requests
-from threading import Thread
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import ccxt
 
-# =========================
+# ======================
 # TELEGRAM CONFIG
-# =========================
-
+# ======================
 TOKEN = "8648698110:AAF2KPxg92LE9JYrTCbZcLmFaDl2w_MDahs"
 CHAT_ID = "-1003891592823"
 
-# =========================
-# FAKE WEB SERVER (Render FIX)
-# =========================
+def send_telegram(text):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    r = requests.post(url, json={
+        "chat_id": CHAT_ID,
+        "text": text
+    })
+    print("TG:", r.status_code, r.text)
 
-def run_server():
-    port = int(os.environ.get("PORT", 10000))
 
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"SMC bot alive")
+# ======================
+# BINANCE SETUP
+# ======================
+exchange = ccxt.binance()
 
-    server = HTTPServer(("0.0.0.0", port), Handler)
-    server.serve_forever()
 
-Thread(target=run_server, daemon=True).start()
+# ======================
+# SIMPLE STRATEGY (EMA CROSS)
+# ======================
+def get_data():
+    ohlcv = exchange.fetch_ohlcv("BTC/USDT", timeframe="1m", limit=50)
+    closes = [c[4] for c in ohlcv]
+    return closes
 
-# =========================
-# TELEGRAM SENDER
-# =========================
 
-def send_telegram(message: str):
-    try:
-        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": CHAT_ID, "text": message})
-    except Exception as e:
-        print("Telegram error:", e)
+def ema(data, period):
+    k = 2 / (period + 1)
+    e = data[0]
+    for price in data:
+        e = price * k + e * (1 - k)
+    return e
 
-# =========================
-# PRICE FETCH (BINANCE)
-# =========================
 
-def get_price():
-    url = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
-    r = requests.get(url, timeout=10)
-    return float(r.json()["price"])
+def check_signal(closes):
+    ema_fast = ema(closes[-10:], 5)
+    ema_slow = ema(closes[-10:], 15)
 
-# =========================
-# SIMPLE SMC LOGIC (CLEAN VERSION)
-# =========================
+    print("FAST:", ema_fast, "SLOW:", ema_slow)
 
-prices = []
-
-def check_signal(prices):
-    if len(prices) < 20:
-        return None
-
-    recent = prices[-20:]
-    last = recent[-1]
-
-    high = max(recent)
-    low = min(recent)
-
-    if last > high * 0.999:
-        return ("LONG", last, low)
-
-    if last < low * 1.001:
-        return ("SHORT", last, high)
-
+    if ema_fast > ema_slow:
+        return "LONG"
+    elif ema_fast < ema_slow:
+        return "SHORT"
     return None
 
-# =========================
+
+# ======================
 # MAIN LOOP
-# =========================
+# ======================
+def main():
+    send_telegram("🚀 BOT STARTED")
 
-print("SMC BOT STARTED")
+    last_signal = None
 
-while True:
-    try:
-        price = get_price()
-        prices.append(price)
+    while True:
+        try:
+            closes = get_data()
+            signal = check_signal(closes)
 
-        print("price:", price)
+            print("SIGNAL:", signal)
 
-        signal = check_signal(prices)
+            if signal and signal != last_signal:
+                msg = f"""
+🚨 SMC SIGNAL (TEST VERSION)
 
-        if signal:
-            side, entry, level = signal
+PAIR: BTCUSDT
+SIDE: {signal}
 
-            msg = f"""
-🚨 SMC SIGNAL
-
-Side: {side}
-Entry: {entry}
-
-SL Level: {level}
+Price: {closes[-1]}
+Timeframe: 1m
 """
+                send_telegram(msg)
+                last_signal = signal
 
-            send_telegram(msg)
-            print("SIGNAL SENT")
+        except Exception as e:
+            print("ERROR:", e)
+            send_telegram(f"ERROR: {e}")
 
-            prices = prices[-100:]
+        time.sleep(30)
 
-    except Exception as e:
-        print("ERROR:", e)
 
-    time.sleep(3)
+if __name__ == "__main__":
+    main()
