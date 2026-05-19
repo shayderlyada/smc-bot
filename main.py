@@ -100,3 +100,21 @@ TP: {tp}
         print("error:", e)
 
     time.sleep(3)
+
+
+    import os
+
+port = int(os.environ.get("PORT", 10000))
+
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"bot alive")
+
+server = HTTPServer(("0.0.0.0", port), Handler)
+
+import threading
+threading.Thread(target=server.serve_forever).start()
